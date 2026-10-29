@@ -7,7 +7,7 @@
 |doctor / skills|依赖、媒体程序、可用适配器；无付费请求|
 |configure-runtime|`--ffmpeg ABS_EXE --ffprobe ABS_EXE`，保存本机媒体程序位置|
 |create / show|创建/读取指定项目；create 可加 `--title`|
-|import|`--kind video/subtitles/script/image --file ABS_FILE`，复制原素材到项目；video 须含原声音轨|
+|import|`--kind video/subtitles/script/image/music --file ABS_FILE`，复制原素材到项目；video 须含原声音轨；music 返回文件及摘要，须再 update 采纳|
 |update|`--input PATCH_JSON --revision N`，仅允许标题/文稿/速度/流程/字幕/剪切/场景/烧录字幕|
 |review|`--stage project/workflow/transcribe-budget/roughcut/packaging/keyframes/final [--no-browser]`|
 |wait|`--request ID --seconds 40`；同请求分段等待、认证保活；返回 pending/completed/stale|
@@ -31,7 +31,9 @@
 }
 ```
 
-scenes 首版支持 overlay（右上局部小窗）和 fullscreen（画面替换，保留真人原声）。包装素材必须按对应时长制作，不混入旁白或私人品牌，字幕最后统一烧录。场景不得跨已删除范围；须按保留区间拆分。剪切或速度改变会使 timing_fingerprint 失效，须重新对齐与确认。attach-scene 不等于视觉门禁通过，Agent 仍须运行 FredTalk 门禁并实际检查。
+scenes 支持 overlay（默认右上，可用 layout={x:0.025,y:0.1,width:0.32} 这类归一化参数调整）和 fullscreen（画面替换，保留真人原声），片段自动淡入淡出。包装素材必须按对应时长制作，不混入旁白或私人品牌，字幕最后统一烧录。场景不得跨已删除范围；须按保留区间拆分。剪切或速度改变会使 timing_fingerprint 失效，须重新对齐与确认。attach-scene 不等于视觉门禁通过，Agent 仍须运行 FredTalk 门禁并实际检查。选择了包装能力但无实际场景时会拒绝导出；明确跳过须将 workflow.packaging 设为 none。
+
+可选 music 对象：导入音乐得到 file/sha256，再 update {music:{file,sha256,gain_db:-20,fade_seconds:2,title,provenance}}。允许 -50 至 -6 dB；页面可调整或移除。新增/改配乐会使包装及成片确认失效，粗剪确认保持。合成时音乐循环补足、淡入淡出、人声侧链避让并做峰值保护；原声不额外增益。audio 下载为未混音乐的原声母带，MP4 含实际混音；默认 music 为 null/未设置。用户自备或本地原创音乐的来源应明确记录。
 
 原始媒体/历史版本不覆盖。project.json 为镜像，`.talking-edit/state.sqlite3` 为权威数据，exports 为每轮产物，work 为中间音轨/识别及工程。项目可含私人录音和临时云数据，不上传仓库。不直接修改 SQLite、reviews 或 tasks 绕过确认。恢复时核对任务状态，未明确结算不猜账单。
 

@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 STAGES = ('project', 'workflow', 'transcribe-budget', 'roughcut', 'packaging', 'keyframes', 'final')
 
 
@@ -108,6 +108,15 @@ def validate(s):
     for previous,current in zip(s['cues'],s['cues'][1:]):
         check(previous['end'] <= current['start']+.002, '字幕时间不能倒序或重叠。')
     check(all(isinstance(c.get('enabled'), bool) for c in s['cuts']), '剪切启用状态无效。')
+    music=s.get('music')
+    if music:
+        check(isinstance(music,dict) and isinstance(music.get('file'),str) and isinstance(music.get('sha256'),str),'音乐文件及摘要缺失。')
+        check(finite(music.get('gain_db')) and -50<=music['gain_db']<=-6,'配乐音量须在 -50 至 -6 dB 范围。')
+        check(finite(music.get('fade_seconds',2)) and 0<=music.get('fade_seconds',2)<=10,'音乐淡入淡出无效。')
+    for scene in s['scenes']:
+        if 'layout' in scene:
+            box=scene['layout'];check(isinstance(box,dict) and all(finite(box.get(k)) for k in ('x','y','width')), '包装布局无效。')
+            check(0<=box['x']<=1 and 0<=box['y']<=1 and 0<box['width']<=1 and box['x']+box['width']<=1,'包装布局超出画面。')
     return s
 
 
@@ -172,7 +181,7 @@ class Project:
         c.execute('INSERT INTO events(kind,data,created) VALUES(?,?,?)', (kind, dumps(data), time.time()))
 
     def update(self, patch, revision):
-        allowed = {'title', 'script', 'speed', 'workflow', 'cues', 'cuts', 'scenes', 'subtitle_burn'}
+        allowed = {'title', 'script', 'speed', 'workflow', 'cues', 'cuts', 'scenes', 'subtitle_burn','music'}
         check(set(patch) <= allowed, '不能修改受保护的项目字段。')
         with self.db() as c:
             s = self.state(c)
@@ -209,7 +218,7 @@ class Project:
             if stage=='packaging':
                 generated={'artifact','artifact_hash','keyframe','reference_keyframe','code','code_hash','component','source_revision','timing_fingerprint'}
                 scenes=[{k:v for k,v in scene.items() if k not in generated} for scene in scenes]
-            base.update(scenes=scenes, packaging=s['workflow']['packaging'])
+            base.update(scenes=scenes, packaging=s['workflow']['packaging'],music=s.get('music'))
         if stage == 'final':
             base.update(subtitle_burn=s['subtitle_burn'], render=s['workflow']['render'])
             base['media_engine']=VERSION

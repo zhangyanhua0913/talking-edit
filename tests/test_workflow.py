@@ -29,6 +29,22 @@ class WorkflowTests(unittest.TestCase):
     def test_persistence_and_export(self):
         p=Project(self.p.root);self.assertEqual(p.state()['title'],'免费测试');self.assertEqual(json.loads((p.root/'project.json').read_text(encoding='utf-8'))['revision'],1)
 
+    def test_music_change_invalidates_packaging_not_roughcut(self):
+        self.video_state();s=self.p.state();rough=self.p.fingerprint('roughcut');pack=self.p.fingerprint('packaging')
+        self.p.update({'music':{'file':'media/music.wav','sha256':'abc','gain_db':-20}},s['revision'])
+        self.assertEqual(rough,self.p.fingerprint('roughcut'));self.assertNotEqual(pack,self.p.fingerprint('packaging'))
+
+    def test_music_and_layout_validation(self):
+        self.video_state();s=self.p.state()
+        with self.assertRaises(EditError):self.p.update({'music':{'file':'media/music.wav','sha256':'abc','gain_db':0}},s['revision'])
+        with self.assertRaises(EditError):self.p.update({'scenes':[dict(id='bad',start=1,end=2,layout={'x':.9,'y':0,'width':.4})]},s['revision'])
+
+    def test_selected_packaging_cannot_silently_export_plain_roughcut(self):
+        from media import render
+        self.video_state();self.p.decide(self.p.open_review('roughcut'),self.p.state()['revision'],'confirm','仅合成测试')
+        with self.assertRaises(EditError) as error:render(self.p)
+        self.assertEqual(error.exception.code,'packaging_incomplete')
+
     def test_stale_update(self):
         self.p.update({'title':'新标题'},1)
         with self.assertRaises(EditError):self.p.update({'title':'旧页面'},1)

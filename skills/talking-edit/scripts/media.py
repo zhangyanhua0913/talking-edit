@@ -97,16 +97,17 @@ def map_cues(cues, mapping, speed=1):
 
 def import_file(project, path, kind, revision=None):
     src = Path(path).resolve()
-    check(src.is_file() and kind in ('video','subtitles','script','image','artifact','keyframe'), '导入文件不存在或类型无效。')
+    check(src.is_file() and kind in ('video','subtitles','script','image','artifact','keyframe','music'), '导入文件不存在或类型无效。')
     if kind in ('subtitles','script'):check(src.stat().st_size<=8*1024**2,'文稿或字幕不能超过8MB。')
     permitted = {'video': ('.mp4','.mov','.webm','.mkv'), 'subtitles': ('.srt',), 'script': ('.txt','.md'),
-                 'image': ('.png','.jpg','.jpeg'), 'artifact': ('.mp4','.webm'), 'keyframe': ('.png','.jpg')}
+                 'image': ('.png','.jpg','.jpeg'), 'artifact': ('.mp4','.webm'), 'keyframe': ('.png','.jpg'),'music':('.wav','.mp3','.m4a','.flac')}
     check(src.suffix.lower() in permitted[kind], '文件扩展名与类型不符。')
     h = file_hash(src)
     dest = project.root / 'media' / (h[:20] + src.suffix.lower())
     if not dest.exists():
         shutil.copyfile(src, dest)
-    if kind in ('artifact','keyframe','image'):
+    if kind in ('artifact','keyframe','image','music'):
+        if kind=='music':check(any(x['codec_type']=='audio' for x in probe(dest)['streams']),'配乐文件须含有效音轨。')
         return {'file': dest.relative_to(project.root).as_posix(), 'sha256': h}
     with project.db() as c:
         s = project.state(c)
@@ -185,11 +186,20 @@ def preview_seam(project, cut_id, revision):
     return {'file':out.relative_to(project.root).as_posix(),'note':'实际剪去区间后的接缝预览；确认仍由用户完成。'}
 
 
+def overlay_geometry(scene,w,h):
+    if scene.get('mode','overlay')=='fullscreen':return w,h,0,0
+    box=scene.get('layout',{'x':.49,'y':.02,'width':.5})
+    return max(2,int(w*box['width'])//2*2),-2,round(w*box['x']),round(h*box['y'])
+
+
 def render(project):
     s = project.state(); check(s['source'], '缺少视频。')
     check(project.approved('roughcut',s), '请在页面确认当前粗剪方案。', 'review_required')
+    check(s['workflow']['packaging']=='none' or s['scenes'], '已选择动态包装，但尚无动画方案；请完成包装，或在流程配置明确选择不添加动态包装。', 'packaging_incomplete')
+    if s['scenes'] or s.get('music'):
+        check(project.approved('packaging',s), '请确认当前动画与配乐方向。', 'review_required')
     if s['scenes']:
-        check(project.approved('packaging',s) and project.approved('keyframes',s), '请确认包装方向和实际关键帧。', 'review_required')
+        check(project.approved('keyframes',s), '请确认实际关键帧。', 'review_required')
     source = project.public_file(s['source']['file'])
     check(file_hash(source)==s['source']['sha256'], '源视频已改变。')
     fingerprint = project.fingerprint('final',s)
@@ -215,7 +225,11 @@ def render(project):
         w,h=display_size(video); scale=min(1,1920/max(w,h),1080/min(w,h)); w=max(2,int(w*scale)//2*2); h=max(2,int(h*scale)//2*2)
         num,den=map(int,video.get('avg_frame_rate','30/1').split('/')); fps=min(30,num/den if den else 30)
         rough=folder/'rough.mp4'
-        if fred_result:
+        videoid=digest({'source':s['source'],'mapping':mapping,'speed':s['speed'],'size':[w,h],'fps':fps,'engine':'source-clock-video-v3','audio':not bool(fred_result)})
+        cached=project.root/'work'/('rough-'+videoid+'.mp4');cachemeta=cached.with_suffix('.json')
+        if cached.exists() and cachemeta.exists() and file_hash(cached)==json.loads(cachemeta.read_text())['sha256']:
+            shutil.copyfile(cached,rough)
+        if not rough.exists() and fred_result:
             # Map each original video timestamp directly; avoid accumulating per-segment AAC/frame padding.
             removed=[];end=0
             for m in mapping:
@@ -226,7 +240,7 @@ def render(project):
             elapsed='+'.join(f'(gte(PTS*TB,{b})*{b-a})' for a,b in removed) or '0'
             vf=f"select='not({excluded})',setpts='(PTS-({elapsed})/TB)/{s['speed']}',scale={w}:{h},fps={fps}:start_time=0,setsar=1"
             run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-vf',vf,'-an','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p',str(rough)])
-        else:
+        elif not rough.exists():
             segments=[]
             for i,m in enumerate(mapping):
                 segment=folder/f'part-{i}.mp4'
@@ -236,7 +250,10 @@ def render(project):
                 segments.append(segment)
             (folder/'concat.txt').write_text('\n'.join("file '"+p.name+"'" for p in segments),encoding='utf-8')
             run([binary('ffmpeg'),'-v','error','-y','-f','concat','-safe','1','-i','concat.txt','-c','copy','rough.mp4'],cwd=folder)
+        if not cached.exists():
+            shutil.copyfile(rough,cached);atomic(cachemeta,{'sha256':file_hash(cached),'video_fingerprint':videoid})
         current=rough
+        scene_args=[];filters=[];last='0:v'
         for idx,scene in enumerate(s['scenes']):
             check(scene.get('artifact') and scene.get('artifact_hash'), '动态片段缺少实际产物。')
             artifact=project.public_file(scene['artifact'])
@@ -249,30 +266,43 @@ def render(project):
             end=start+(scene['end']-scene['start'])/s['speed']
             mode=scene.get('mode','overlay')
             check(mode in ('overlay','fullscreen'),'包装模式无效。')
-            overlay_size=f'scale={w}:{h}' if mode=='fullscreen' else f'scale={max(2,w//2//2*2)}:-2'
-            nxt=folder/f'packed-{idx}.mp4'
-            run([binary('ffmpeg'),'-v','error','-y','-i',str(current),'-i',str(artifact),'-filter_complex',
-                f"[1:v]{overlay_size},setpts=PTS-STARTPTS+{start}/TB[ov];[0:v][ov]overlay=x=main_w-overlay_w-20:y=20:eof_action=pass:enable='between(t,{start},{end})'[v]" if mode=='overlay' else
-                f"[1:v]{overlay_size},setpts=PTS-STARTPTS+{start}/TB[ov];[0:v][ov]overlay=0:0:eof_action=pass:enable='between(t,{start},{end})'[v]",
-                '-map','[v]','-map','0:a?','-c:v','libx264','-preset','fast','-crf','20','-c:a','copy',str(nxt)])
-            current=nxt
+            sw,sh,x,y=overlay_geometry(scene,w,h)
+            scene_args+=['-i',str(artifact)]
+            # Every animation is processed in one pass; fades avoid rectangular flashes at entrances.
+            length=end-start;fade=min(.22,length/4)
+            filters.append(f"[{idx+1}:v]scale={sw}:{sh},format=rgba,fade=t=in:st=0:d={fade}:alpha=1,fade=t=out:st={length-fade}:d={fade}:alpha=1,setpts=PTS-STARTPTS+{start}/TB[ov{idx}]")
+            filters.append(f"[{last}][ov{idx}]overlay=x={x}:y={y}:eof_action=pass:enable='between(t,{start},{end})'[p{idx}]")
+            last=f'p{idx}'
+        if filters:
+            current=folder/'packed.mp4'
+            run([binary('ffmpeg'),'-v','error','-y','-filter_complex_threads','1','-i',str(rough),*scene_args,'-filter_complex',';'.join(filters),'-map',f'[{last}]','-map','0:a?','-c:v','libx264','-preset','fast','-crf','20','-c:a','copy',str(current)])
         output=folder/'film.mp4'
         args=[binary('ffmpeg'),'-v','error','-y','-i',str(current)]
+        music=s.get('music');audio_index=1 if fred_result else 0
         if fred_result:
             master=Path(fred_result['path'])/'review-cut.wav'
-            args+=['-i',str(master),'-map','0:v','-map','1:a','-af','atempo='+str(s['speed'])]
+            args+=['-i',str(master)]
+        if music:
+            musicfile=project.public_file(music['file']);check(file_hash(musicfile)==music['sha256'],'配乐文件已变，请重新采纳。')
+            total=mapping[-1]['output_end'];fade=music.get('fade_seconds',2)
+            args+=['-stream_loop','-1','-i',str(musicfile)]
+            voice=f'[{audio_index}:a]'+('atempo='+str(s['speed'])+',' if fred_result else '')+'aresample=48000,asplit=2[voice][side]'
+            graph=f"{voice};[{audio_index+1}:a]aresample=48000,atrim=duration={total},asetpts=PTS-STARTPTS,volume={music['gain_db']}dB,afade=t=in:d={fade},afade=t=out:st={max(0,total-fade)}:d={fade}[bgm];[bgm][side]sidechaincompress=threshold=0.025:ratio=5:attack=30:release=500[duck];[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:level=0[mix]"
+            args+=['-filter_complex',graph,'-map','0:v','-map','[mix]']
+        elif fred_result:
+            args+=['-map','0:v','-map','1:a','-af','atempo='+str(s['speed'])]
         if s['subtitle_burn'] and cues:
             args += ['-vf',"subtitles=captions.srt:force_style='FontName=Microsoft YaHei,FontSize=20,Outline=1,MarginV=24'",'-c:v','libx264','-preset','fast','-crf','20']
         else:
             args += ['-c:v','copy']
-        run(args+['-c:a','aac' if fred_result else 'copy','-movflags','+faststart','film.mp4'],cwd=folder)
+        run(args+['-c:a','aac' if fred_result or music else 'copy','-movflags','+faststart','film.mp4'],cwd=folder)
         run([binary('ffmpeg'),'-v','error','-i',str(output),'-f','null','-'])
         final_info=probe(output); duration=float(final_info['format']['duration'])
         check(abs(duration-mapping[-1]['output_end'])<.15, '导出时长与时间映射不一致。')
         check(all(0<=x['start']<x['end']<=duration+.03 for x in cues), '导出字幕越界。')
         result=dict(file=output.relative_to(project.root).as_posix(), subtitles=(folder/'captions.srt').relative_to(project.root).as_posix(),
             duration=duration, width=w,height=h,fps=fps, mapping=mapping, warnings=warnings, technicalPass=True,
-            listeningReviewed=False, userConfirmedAtRender=False, revision=s['revision'], sha256=file_hash(output),manifest=(folder/'manifest.json').relative_to(project.root).as_posix())
+            listeningReviewed=False, userConfirmedAtRender=False, revision=s['revision'], sha256=file_hash(output),manifest=(folder/'manifest.json').relative_to(project.root).as_posix(),music=music,animation_count=len(s['scenes']))
         atomic(folder/'manifest.json',result)
         # Preserve shared audio independently; subtitle-only changes reuse the same PCM file.
         audioid=digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed'],'engine':'video-clock-fred-pcm-v2'})

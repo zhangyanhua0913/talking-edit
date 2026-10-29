@@ -80,7 +80,7 @@ def agent_brief(project,step):
 
 
 def attach_scene(project,args):
-    from media import import_file,probe,binary,run,display_size
+    from media import import_file,probe,binary,run,display_size,overlay_geometry
     import shutil
     s=project.state();check(project.approved('packaging',s),'请先确认当前包装方向。','review_required')
     scene=next((x for x in s['scenes'] if x['id']==args.scene),None);check(scene,'场景不存在。')
@@ -122,7 +122,8 @@ def attach_scene(project,args):
     if scene.get('mode','overlay')=='fullscreen':
         run([binary('ffmpeg'),'-v','error','-y','-ss',str(offset),'-i',str(project.public_file(output['file'])),'-vf',f'scale={w}:{h}','-frames:v','1',str(composite)])
     else:
-        run([binary('ffmpeg'),'-v','error','-y','-ss',str(scene['start']+offset*s['speed']),'-i',str(source),'-ss',str(offset),'-i',str(project.public_file(output['file'])),'-filter_complex',f'[0:v]scale={w}:{h}[bg];[1:v]scale={max(2,w//2//2*2)}:-2[ov];[bg][ov]overlay=main_w-overlay_w-20:20','-frames:v','1',str(composite)])
+        sw,sh,x,y=overlay_geometry(scene,w,h)
+        run([binary('ffmpeg'),'-v','error','-y','-ss',str(scene['start']+offset*s['speed']),'-i',str(source),'-ss',str(offset),'-i',str(project.public_file(output['file'])),'-filter_complex',f'[0:v]scale={w}:{h}[bg];[1:v]scale={sw}:{sh}[ov];[bg][ov]overlay={x}:{y}','-frames:v','1',str(composite)])
     scene.update(artifact=output['file'],artifact_hash=output['sha256'],keyframe=composite.relative_to(project.root).as_posix(),reference_keyframe=keyframe['file'],
         code=code_dest.relative_to(project.root).as_posix(),code_hash=code_hash,component=args.component,source_revision=args.source_revision,
         timing_fingerprint=digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed']}))
