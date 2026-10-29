@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+*.sqlite*
+*.dpapi
+*.mp4
+*.wav
+*.flac
+.env
