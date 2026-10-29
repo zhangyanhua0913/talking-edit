@@ -89,6 +89,12 @@ class WorkflowTests(unittest.TestCase):
     def test_srt_roundtrip(self):
         rows=[dict(id='cue-1',start=.25,end=1.1,text='你好，世界')];parsed=parse_srt(srt_text(rows));self.assertEqual(parsed,rows)
 
+    def test_rotated_display_geometry(self):
+        from media import display_size
+        self.assertEqual(display_size({'width':1080,'height':1920,'side_data_list':[{'rotation':90}]}),(1920,1080))
+        self.assertEqual(display_size({'width':1080,'height':1920,'tags':{'rotate':'-90'}}),(1920,1080))
+        self.assertEqual(display_size({'width':1080,'height':1920}),(1080,1920))
+
     def test_unsupported_skill_cannot_save(self):
         s=self.p.state();w=s['workflow'];w['render']='qwen-cloud'
         with self.assertRaises(EditError):self.p.update({'workflow':w},s['revision'])

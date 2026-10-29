@@ -28,6 +28,13 @@ def probe(path):
     return json.loads(run([binary('ffprobe'), '-v', 'error', '-show_streams', '-show_format', '-of', 'json', str(path)]))
 
 
+def display_size(stream):
+    rotation=next((x['rotation'] for x in stream.get('side_data_list',[]) if 'rotation' in x),stream.get('tags',{}).get('rotate',0))
+    w,h=stream['width'],stream['height']
+    if round(float(rotation)/90)%2:w,h=h,w
+    return w,h
+
+
 def parse_srt(text):
     result = []
     for block in re.split(r'\r?\n\s*\r?\n', text.strip().lstrip('\ufeff')):
@@ -126,10 +133,10 @@ def extract_audio(project):
     s = project.state(); check(s['source'], '请导入视频。')
     source = project.public_file(s['source']['file'])
     check(file_hash(source) == s['source']['sha256'], '源视频已被外部修改。', 'source_changed')
-    out = project.root / 'work' / (s['source']['sha256'][:20] + '-source.wav')
+    out = project.root / 'work' / (s['source']['sha256'][:20] + '-source-clock-v3.wav')
     if not out.exists():
         temp = out.with_suffix('.'+uuid.uuid4().hex+'.tmp.wav')
-        run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-vn','-ac','1','-ar','16000','-c:a','pcm_s16le',str(temp)])
+        run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-vn','-af',f"aresample=async=1:first_pts=0,apad=whole_dur={s['duration']},atrim=duration={s['duration']}",'-t',str(s['duration']),'-ac','1','-ar','16000','-c:a','pcm_s16le',str(temp)])
         os.replace(temp,out)
     return out
 
@@ -205,18 +212,30 @@ def render(project):
         cues, warnings = map_cues(s['cues'],mapping,s['speed'])
         (folder/'captions.srt').write_text(srt_text(cues),encoding='utf-8')
         info = probe(source); video=next(x for x in info['streams'] if x['codec_type']=='video')
-        w,h=video['width'],video['height']; scale=min(1,1920/max(w,h),1080/min(w,h)); w=max(2,int(w*scale)//2*2); h=max(2,int(h*scale)//2*2)
+        w,h=display_size(video); scale=min(1,1920/max(w,h),1080/min(w,h)); w=max(2,int(w*scale)//2*2); h=max(2,int(h*scale)//2*2)
         num,den=map(int,video.get('avg_frame_rate','30/1').split('/')); fps=min(30,num/den if den else 30)
-        segments=[]
-        for i,m in enumerate(mapping):
-            segment=folder/f'part-{i}.mp4'
-            run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-filter_complex',
-                f"[0:v]trim=start={m['source_start']}:end={m['source_end']},setpts=(PTS-STARTPTS)/{s['speed']},scale={w}:{h},fps={fps},setsar=1[v];[0:a]atrim=start={m['source_start']}:end={m['source_end']},asetpts=PTS-STARTPTS,atempo={s['speed']}[a]",
-                '-map','[v]','-map','[a]','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-ar','48000',str(segment)])
-            segments.append(segment)
-        (folder/'concat.txt').write_text('\n'.join("file '"+p.name+"'" for p in segments),encoding='utf-8')
         rough=folder/'rough.mp4'
-        run([binary('ffmpeg'),'-v','error','-y','-f','concat','-safe','1','-i','concat.txt','-c','copy','rough.mp4'],cwd=folder)
+        if fred_result:
+            # Map each original video timestamp directly; avoid accumulating per-segment AAC/frame padding.
+            removed=[];end=0
+            for m in mapping:
+                if m['source_start']>end:removed.append((end,m['source_start']))
+                end=m['source_end']
+            if end<s['duration']:removed.append((end,s['duration']))
+            excluded='+'.join(f'(gte(t,{a})*lt(t,{b}))' for a,b in removed) or '0'
+            elapsed='+'.join(f'(gte(PTS*TB,{b})*{b-a})' for a,b in removed) or '0'
+            vf=f"select='not({excluded})',setpts='(PTS-({elapsed})/TB)/{s['speed']}',scale={w}:{h},fps={fps}:start_time=0,setsar=1"
+            run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-vf',vf,'-an','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p',str(rough)])
+        else:
+            segments=[]
+            for i,m in enumerate(mapping):
+                segment=folder/f'part-{i}.mp4'
+                run([binary('ffmpeg'),'-v','error','-y','-i',str(source),'-filter_complex',
+                    f"[0:v]trim=start={m['source_start']}:end={m['source_end']},setpts=(PTS-STARTPTS)/{s['speed']},scale={w}:{h},fps={fps},setsar=1[v];[0:a]atrim=start={m['source_start']}:end={m['source_end']},asetpts=PTS-STARTPTS,atempo={s['speed']}[a]",
+                    '-map','[v]','-map','[a]','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-ar','48000',str(segment)])
+                segments.append(segment)
+            (folder/'concat.txt').write_text('\n'.join("file '"+p.name+"'" for p in segments),encoding='utf-8')
+            run([binary('ffmpeg'),'-v','error','-y','-f','concat','-safe','1','-i','concat.txt','-c','copy','rough.mp4'],cwd=folder)
         current=rough
         for idx,scene in enumerate(s['scenes']):
             check(scene.get('artifact') and scene.get('artifact_hash'), '动态片段缺少实际产物。')
@@ -235,7 +254,7 @@ def render(project):
             run([binary('ffmpeg'),'-v','error','-y','-i',str(current),'-i',str(artifact),'-filter_complex',
                 f"[1:v]{overlay_size},setpts=PTS-STARTPTS+{start}/TB[ov];[0:v][ov]overlay=x=main_w-overlay_w-20:y=20:eof_action=pass:enable='between(t,{start},{end})'[v]" if mode=='overlay' else
                 f"[1:v]{overlay_size},setpts=PTS-STARTPTS+{start}/TB[ov];[0:v][ov]overlay=0:0:eof_action=pass:enable='between(t,{start},{end})'[v]",
-                '-map','[v]','-map','0:a','-c:v','libx264','-preset','fast','-crf','20','-c:a','copy',str(nxt)])
+                '-map','[v]','-map','0:a?','-c:v','libx264','-preset','fast','-crf','20','-c:a','copy',str(nxt)])
             current=nxt
         output=folder/'film.mp4'
         args=[binary('ffmpeg'),'-v','error','-y','-i',str(current)]
@@ -256,11 +275,13 @@ def render(project):
             listeningReviewed=False, userConfirmedAtRender=False, revision=s['revision'], sha256=file_hash(output),manifest=(folder/'manifest.json').relative_to(project.root).as_posix())
         atomic(folder/'manifest.json',result)
         # Preserve shared audio independently; subtitle-only changes reuse the same PCM file.
-        audioid=digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed'],'engine':'video-clock-fred-pcm-v1'})
+        audioid=digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed'],'engine':'video-clock-fred-pcm-v2'})
         audio=project.root/'work'/('edited-'+audioid+'.wav')
         if not audio.exists():
             if fred_result and s['speed']==1:
                 shutil.copyfile(Path(fred_result['path'])/'review-cut.wav',audio)
+            elif fred_result:
+                run([binary('ffmpeg'),'-v','error','-y','-i',str(Path(fred_result['path'])/'review-cut.wav'),'-af','atempo='+str(s['speed']),'-c:a','pcm_s16le',str(audio)])
             else:
                 run([binary('ffmpeg'),'-v','error','-y','-i',str(rough),'-vn','-c:a','pcm_s16le',str(audio)])
         result['audio']=audio.relative_to(project.root).as_posix(); result['audio_sha256']=file_hash(audio)

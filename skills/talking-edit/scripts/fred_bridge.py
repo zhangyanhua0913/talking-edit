@@ -10,16 +10,16 @@ from media import binary,extract_audio,run,srt_text
 def roughcut(project,state):
     upstream=fred_root()/'skills/audio-subtitle-roughcut/assets/review-app/server.py'
     check(upstream.is_file(),'请先准备固定版 FredTalk。','dependency_missing')
-    identity=digest({'source':state['source'],'cues':state['cues'],'cuts':state['cuts'],'fred':FRED_REVISION,'clock':'video-duration-v1'})
+    identity=digest({'source':state['source'],'cues':state['cues'],'cuts':state['cuts'],'fred':FRED_REVISION,'clock':'video-duration-v3'})
     root=project.root/'work'/('fred-roughcut-'+identity)
     receipt=root/'bridge-result.json'
     if receipt.exists():return json.loads(receipt.read_text(encoding='utf-8'))
     root.mkdir(parents=True,exist_ok=True)
     source=extract_audio(project)
-    normalized=project.root/'work'/('fred-source-video-clock-'+state['source']['sha256'][:20]+'.wav')
+    normalized=project.root/'work'/('fred-source-video-clock-v3-'+state['source']['sha256'][:20]+'.wav')
     if not normalized.exists():
         # Full-band source, no gain or speed. The ASR 16k mono extraction is not used as delivery master.
-        run([binary('ffmpeg'),'-v','error','-y','-i',str(project.public_file(state['source']['file'])),'-vn','-t',str(state['duration']),'-ar','48000','-ac','2','-c:a','pcm_s16le',str(normalized)])
+        run([binary('ffmpeg'),'-v','error','-y','-i',str(project.public_file(state['source']['file'])),'-vn','-af',f"aresample=async=1:first_pts=0,apad=whole_dur={state['duration']},atrim=duration={state['duration']}",'-t',str(state['duration']),'-ar','48000','-ac','2','-c:a','pcm_s16le',str(normalized)])
     shutil.copyfile(upstream,root/'server.py')
     subs=root/'source.srt';subs.write_text(srt_text(state['cues']),encoding='utf-8')
     script=root/'script.md';script.write_text(state['script'],encoding='utf-8')

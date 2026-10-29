@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 STAGES = ('project', 'workflow', 'transcribe-budget', 'roughcut', 'packaging', 'keyframes', 'final')
 
 
@@ -212,6 +212,7 @@ class Project:
             base.update(scenes=scenes, packaging=s['workflow']['packaging'])
         if stage == 'final':
             base.update(subtitle_burn=s['subtitle_burn'], render=s['workflow']['render'])
+            base['media_engine']=VERSION
         if stage in ('project', 'workflow'):
             base = {k: v for k, v in s.items() if k not in ('revision', 'paused')}
         return digest(base)

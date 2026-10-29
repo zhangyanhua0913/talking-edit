@@ -9,7 +9,7 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
-from core import Project, EditError, check, dumps, home, atomic, digest, file_hash
+from core import Project, EditError, check, dumps, home, atomic, digest, file_hash,VERSION
 
 if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8')
 
@@ -80,7 +80,7 @@ def agent_brief(project,step):
 
 
 def attach_scene(project,args):
-    from media import import_file,probe,binary,run
+    from media import import_file,probe,binary,run,display_size
     import shutil
     s=project.state();check(project.approved('packaging',s),'请先确认当前包装方向。','review_required')
     scene=next((x for x in s['scenes'] if x['id']==args.scene),None);check(scene,'场景不存在。')
@@ -117,7 +117,7 @@ def attach_scene(project,args):
     # User reviews an actual composition over their source, rather than an unrelated supplied poster.
     composite=project.root/'work'/('keyframe-'+digest([output['sha256'],scene,s['source']])[:24]+'.png')
     source=project.public_file(s['source']['file']);offset=min(.6,duration/2)
-    info=next(x for x in probe(source)['streams'] if x['codec_type']=='video');w,h=info['width'],info['height']
+    info=next(x for x in probe(source)['streams'] if x['codec_type']=='video');w,h=display_size(info)
     scale=min(1,1920/max(w,h),1080/min(w,h));w=max(2,int(w*scale)//2*2);h=max(2,int(h*scale)//2*2)
     if scene.get('mode','overlay')=='fullscreen':
         run([binary('ffmpeg'),'-v','error','-y','-ss',str(offset),'-i',str(project.public_file(output['file'])),'-vf',f'scale={w}:{h}','-frames:v','1',str(composite)])
@@ -209,7 +209,7 @@ def main():
         from registry import status,prepare_fred,prepare_whisper,register,fred_root
         from media import binary,import_file,analyze,render
         if a.command=='doctor':
-            result={'version':'0.1.0','python':sys.version.split()[0],'home':str(home()),'skills':status()}
+            result={'version':VERSION,'python':sys.version.split()[0],'home':str(home()),'skills':status()}
             for name in ('ffmpeg','ffprobe'):
                 try:result[name]=binary(name)
                 except EditError:result[name]=None
