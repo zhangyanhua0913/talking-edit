@@ -153,6 +153,28 @@ def waveform(project):
     return {'duration': len(data)/rate, 'peaks': peaks}
 
 
+def speed_advice(state):
+    """Transparent local heuristic over retained captions, never an automatic edit."""
+    if not state.get('source') or not state.get('cues'):
+        return {'available':False,'reason':'请先导入视频及字幕，再估算建议语速。'}
+    mapping=intervals(state['duration'],state['cuts'],1)
+    cues,_=map_cues(state['cues'],mapping,1)
+    duration=mapping[-1]['output_end']
+    characters=sum(len(re.findall(r'[\u4e00-\u9fff]|[A-Za-z0-9]+',x['text'])) for x in cues)
+    coverage=sum(x['end']-x['start'] for x in cues)
+    rate=characters/max(duration,.01)
+    # Product heuristic, not a claim about a universal ideal speaking rate.
+    target=5.5
+    desired=max(1,min(1.25,target/max(rate,.01)))
+    options=[1,1.1,1.15,1.2,1.25,1.3,1.5]
+    suggested=min(options[:-1],key=lambda v:abs(v-desired))
+    return {'available':True,'suggested':suggested,'characters':characters,'retained_seconds':round(duration,3),
+        'characters_per_minute':round(rate*60),'caption_gap_ratio':round(max(0,1-coverage/max(duration,.01)),3),
+        'options':[{'speed':v,'seconds':round(duration/v,1)} for v in options],
+        'reason':f'按保留字幕约 {characters} 个中文字符/英文词、原速约 {rate*60:.0f} 字词/分钟估算；以5.5字词/秒作为本工具可试听的节奏目标，自动建议最高1.25倍。',
+        'limitations':'字幕字数和时间间隙只是估算，不等于声学停顿识别；漏字、字幕时码及语言会影响结果。最终按试听选择，不自动改速。'}
+
+
 def analyze(project):
     """Agent still judges semantic mistakes; deterministic tools only suggest pauses/repeats."""
     s = project.state(); audio = extract_audio(project)
@@ -258,7 +280,8 @@ def render(project):
             check(scene.get('artifact') and scene.get('artifact_hash'), '动态片段缺少实际产物。')
             artifact=project.public_file(scene['artifact'])
             check(file_hash(artifact)==scene['artifact_hash'], '包装视频发生变化，请重新采纳。')
-            check(scene.get('timing_fingerprint') == digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed']}), '剪切已变，包装需重新对齐。')
+            artifact_speed=scene.get('artifact_speed',1)
+            check(scene.get('timing_fingerprint') == digest({'source':s['source'],'cuts':s['cuts'],'speed':artifact_speed}), '剪切已变，包装需重新对齐。')
             # Scene clocks are source clocks; only uncut, contiguous scenes can be overlaid.
             containing=next((m for m in mapping if m['source_start']<=scene['start'] and scene['end']<=m['source_end']),None)
             check(containing, '包装跨越剪切点，请先拆为连续片段。')
@@ -270,7 +293,7 @@ def render(project):
             scene_args+=['-i',str(artifact)]
             # Every animation is processed in one pass; fades avoid rectangular flashes at entrances.
             length=end-start;fade=min(.22,length/4)
-            filters.append(f"[{idx+1}:v]scale={sw}:{sh},format=rgba,fade=t=in:st=0:d={fade}:alpha=1,fade=t=out:st={length-fade}:d={fade}:alpha=1,setpts=PTS-STARTPTS+{start}/TB[ov{idx}]")
+            filters.append(f"[{idx+1}:v]scale={sw}:{sh},format=rgba,setpts=(PTS-STARTPTS)*{artifact_speed/s['speed']},fade=t=in:st=0:d={fade}:alpha=1,fade=t=out:st={length-fade}:d={fade}:alpha=1,setpts=PTS+{start}/TB[ov{idx}]")
             filters.append(f"[{last}][ov{idx}]overlay=x={x}:y={y}:eof_action=pass:enable='between(t,{start},{end})'[p{idx}]")
             last=f'p{idx}'
         if filters:
@@ -301,7 +324,7 @@ def render(project):
         check(abs(duration-mapping[-1]['output_end'])<.15, '导出时长与时间映射不一致。')
         check(all(0<=x['start']<x['end']<=duration+.03 for x in cues), '导出字幕越界。')
         result=dict(file=output.relative_to(project.root).as_posix(), subtitles=(folder/'captions.srt').relative_to(project.root).as_posix(),
-            duration=duration, width=w,height=h,fps=fps, mapping=mapping, warnings=warnings, technicalPass=True,
+            duration=duration, width=w,height=h,fps=fps,speed=s['speed'], mapping=mapping, warnings=warnings, technicalPass=True,
             listeningReviewed=False, userConfirmedAtRender=False, revision=s['revision'], sha256=file_hash(output),manifest=(folder/'manifest.json').relative_to(project.root).as_posix(),music=music,animation_count=len(s['scenes']))
         atomic(folder/'manifest.json',result)
         # Preserve shared audio independently; subtitle-only changes reuse the same PCM file.

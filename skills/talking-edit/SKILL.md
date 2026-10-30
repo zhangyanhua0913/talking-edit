@@ -7,6 +7,12 @@ description: 剪辑已录好的真人口播视频，打开本地页面选择各�
 
 以本 Skill 的 `scripts/cli.py` 为唯一执行入口，命令返回 JSON。先运行 doctor，缺媒体程序时用 configure-runtime 保存用户本机 FFmpeg/ffprobe 路径；不改全局环境。业务项目和生成媒体放安装目录外，默认建议用户目录的 TalkingEditProjects，不扫描无关磁盘。
 
+新用户安装与依赖准备见 [首次使用](references/quickstart.md)。内置暗金和资料讲解模板随包提供；自由创意包装才需另装 Remotion 插件。首次下载环境、模型、FredTalk及浏览器时说明用途和位置。
+
+批量请求时使用工作台“批量处理”或 `batch-create/batch-add/batch-list/batch-enqueue/batch-run/batch-open`；每个视频独立项目。先批量运行本地转写，再逐项目由 Agent 完成粗剪与包装方案，分别创建审看；得到用户对各范围的确认后将渲染加入串行队列。不能把本地转写完成说成批量成片完成。详见 [批量工作流](references/batch.md)。
+
+用户显式选择全自动批次时，当前仅执行本地转写＋保留原内容＋无包装或暗金标题模板＋导出，自动授权范围绑定批次配置。单视频也可放入此批次。最终产物待用户听看，不自动记录最终认可；其他包装走 Agent 手动流程，不能承诺全部风格全自动。
+
 ## 制作与交互
 
 1. 创建项目：`python SKILL_DIR/scripts/cli.py --project ABS_PROJECT create --title 标题`。已有项目先 recover，不另建来避开未知原任务。用 import 导入用户指定的视频、SRT、文稿或图片，也可打开 project 页让用户选择文件。
@@ -16,11 +22,18 @@ description: 剪辑已录好的真人口播视频，打开本地页面选择各�
 5. `step roughcut` 返回所选 Agent Skill 的指令路径及任务说明。读取 FredTalk 指令，结合文稿、词时码与实际声音细查口误；`step analyze` 只补长低电平与相邻重复候选，不等于语义识别。用 update 保存当前 cues/cuts，不编辑数据库批准剪切。保留自然表达，不把识别重复直接当真实重说。
 6. 打开 roughcut 审看，用户可改字、启用/恢复剪切、试听原段与真实剪后接缝、撤销重做。保存修改会升版本；原 wait 返回 stale 时读回当前项目，再创建该阶段审看。用户确认当前方案后才渲染。
 7. 包装可选 none，或 `step packaging` 读取 FredTalk 制作入口。Agent 用 catalog 检索、看准确参考及源码，为逐段 scenes 写 componentPlan 候选和取舍，默认人物为主、局部图文，必要时全屏解释。公开预览不等于源码已安装。只用已公开且依赖校验通过的组件，不自动买会员素材，不沿用 Fred 品牌、宣传配音、私人音乐或固定1.1倍/+8dB。
+   也可在流程配置选择 `remotion-plugin`：Agent 按 [Remotion 适配流程](references/remotion-workflow.md) 使用已安装的 Remotion 插件独立创作；该选项与 FredTalk 组件库门禁是不同创作路径，保留各自的版本与审看记录。
+   选择 `remotion-gold` 时使用随包的 [暗金科技风格](references/gold-style.md)，由 Agent 按当期字幕、素材和时间映射制作，用户可以按段审看和调整；不可复用其他项目的人物、音频、品牌或固定时间轴。
+   知识、新闻、产品和观点口播可选择 `remotion-evidence`，按 [资料讲解与人物同屏](references/evidence-style.md) 组织人物、真实资料和解释画面，先准备资料与时间对照；缺资料时回到人物或标注示意，不编造网页和数据。此能力为Agent编排，尚未接入批次全自动。
 8. 先 packaging 确认方向，再依据对应上游 Skill 制作有来源的 Remotion 工程，运行其组件/关键帧/动态门禁。attach-scene 导入锁定依赖的工程、真实视频和关键帧；打开 keyframes 供用户确认。剪切改变后包装时间映射必须重核，不能用旧关键帧冒充新版。
 9. `step render` 本地执行当前确认方案，默认原速、保留画幅、不额外增益和BGM。用户要求配乐时用 import --kind music 导入有权使用的音乐，并 update music（file/sha256/gain_db/fade_seconds/title/provenance），经 packaging 确认后合成；人声侧链自动避让，保留原声母带，不能套用 Fred 私人音乐及其固定电平。scenes 可用归一化 layout（x/y/width）避开人物；片段淡入淡出，多段一次合成。完整解码/时长/字幕门禁通过后打开 final。按反馈只修改受影响内容，再按范围确认；不能用技术通过冒充实际听看或用户认可。
 10. 用户确认后交付 MP4/SRT/manifest、音轨、剪切与时间映射、包装工程。结束 stop-server，保留原项目、旧产物和任务记录。
 
 ## 恢复与边界
+
+包装先明确“画面中的对象发生什么变化”：流程用对象接力/状态演变，组合用汇入/合并，对比用前后差异；按实际组件能力选择，避免把所有语义段默认做成同一种列表卡。查看整片总览及进入/中间/收尾动态状态；字清楚、来源门禁通过只是必要检查，不代表视觉效果完成。用户否定效果时保留原剪切和可复用资产，实质重做对应构图与动作，不只换文字、颜色或参考编号。
+
+工作台“字幕与粗剪”和“任务与交付”提供自动语速建议、1/1.1/1.15/1.2/1.25/1.3/1.5倍选择和同一成片对比试听。建议是基于保留字幕字词数/时长的透明本地估算，最高建议1.25倍，不冒称声学自然度判定。试听仅改变播放器；保存后才修改项目，旧输出标为历史，须按新速度重核确认并重新导出。动画按采纳时artifact_speed重定时，源切点变化仍拒绝旧素材；配乐独立混音不随语速升调。
 
 revise：读 note 修改当前范围再创建审看。pause：停止未提交后续；恢复由用户明确要求，再 recover --resume。任务 running 不自动重提，先核原 PID/产物；failed 与 unknown 都保留证据。云提交超时或扣费未知只查原编号，不擅自重新识别、退款或更换Key。首版不会唤醒已结束的 Agent 会话。
 

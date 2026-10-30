@@ -16,6 +16,9 @@ SPECS = [
     dict(id='qwen-cloud', name='千问云端识别', stages=['transcribe'], execution='script', input='video', output='word-cues', version='1', dependency='fredtalk'),
     dict(id='fredtalk-roughcut', name='FredTalk 字幕与粗剪', stages=['roughcut'], execution='agent', input='source-cues', output='reviewed-cuts', version='2.5', dependency='fredtalk', source_revision=FRED_REVISION),
     dict(id='fredtalk-motion', name='FredTalk 动态包装', stages=['packaging'], execution='agent', input='reviewed-timeline', output='remotion-clips', version='2.5', dependency='fredtalk', source_revision=FRED_REVISION),
+    dict(id='remotion-plugin', name='Remotion 插件 · 自由创意包装', stages=['packaging'], execution='agent', input='reviewed-timeline', output='remotion-clips', version='1', dependency='remotion', source_revision='remotion-plugin-4.0.534'),
+    dict(id='remotion-gold', name='Remotion · 暗金科技动态包装', stages=['packaging'], execution='agent', input='reviewed-timeline', output='remotion-clips', version='1', dependency='remotion', source_revision='talking-edit-gold-style-v1'),
+    dict(id='remotion-evidence', name='Remotion · 资料讲解与人物同屏', stages=['packaging'], execution='agent', input='reviewed-timeline', output='remotion-clips', version='2', dependency='remotion', source_revision='talking-edit-evidence-v2'),
     dict(id='none', name='不添加动态包装', stages=['packaging'], execution='script', input='reviewed-timeline', output='video', version='1', dependency=None),
     dict(id='ffmpeg', name='本地 FFmpeg', stages=['render'], execution='script', input='timeline', output='mp4-srt', version='1', dependency='ffmpeg')]
 
@@ -59,6 +62,14 @@ def status():
             reason.append('需要隔离环境及 small 模型')
         if x['dependency']=='ffmpeg' and not (os.environ.get('TALKING_EDIT_FFMPEG') or cfg.get('ffmpeg') or shutil.which('ffmpeg')):
             reason.append('缺少 FFmpeg')
+        if x['dependency']=='remotion':
+            node=os.environ.get('TALKING_EDIT_NODE') or cfg.get('node') or shutil.which('node')
+            if not node or not Path(node).is_file():reason.append('缺少 Node.js')
+            if x['id']=='remotion-plugin':
+                plugin=Path(os.environ.get('CODEX_HOME',Path.home()/'.codex'))/'plugins/cache/openai-curated-remote/remotion'
+                if not any(plugin.glob('*/skills/remotion-best-practices/SKILL.md')):reason.append('需要安装 Remotion 插件并重启 Agent 会话')
+            template={'remotion-gold':('gold-motion','Gold.tsx'),'remotion-evidence':('evidence-motion','Evidence.tsx')}.get(x['id'])
+            if template and not (Path(__file__).resolve().parents[1]/'templates'/template[0]/'src'/template[1]).is_file():reason.append('内置风格模板缺失，请重新安装 Skill')
         if x['id']=='qwen-cloud':
             if not Vault().status()['configured']:reason.append('请在页面配置 Key')
             if not (home()/'cloud-pricing.json').exists():reason.append('官方费率尚未核验')

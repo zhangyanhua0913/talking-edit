@@ -70,6 +70,12 @@ def agent_brief(project,step):
     check(availability['ready'],'；'.join(availability['reasons']),'dependency_missing')
     if selection.startswith('fredtalk'):
         instructions=fred_root()/'skills'/('audio-subtitle-roughcut' if step=='roughcut' else 'fred-remotion-output')/'SKILL.md'
+    elif selection=='remotion-plugin':
+        instructions=Path(__file__).resolve().parents[1]/'references/remotion-workflow.md'
+    elif selection=='remotion-gold':
+        instructions=Path(__file__).resolve().parents[1]/'references/gold-style.md'
+    elif selection=='remotion-evidence':
+        instructions=Path(__file__).resolve().parents[1]/'references/evidence-style.md'
     else:
         instructions=Path(spec['instructions']);check(file_hash(instructions)==spec['instructions_hash'],'第三方指令已变，请重新审阅注册。')
     return {'execution':'agent','instructions':str(instructions),'project':s,'source_revision':spec.get('source_revision'),
@@ -124,7 +130,7 @@ def attach_scene(project,args):
     else:
         sw,sh,x,y=overlay_geometry(scene,w,h)
         run([binary('ffmpeg'),'-v','error','-y','-ss',str(scene['start']+offset*s['speed']),'-i',str(source),'-ss',str(offset),'-i',str(project.public_file(output['file'])),'-filter_complex',f'[0:v]scale={w}:{h}[bg];[1:v]scale={sw}:{sh}[ov];[bg][ov]overlay={x}:{y}','-frames:v','1',str(composite)])
-    scene.update(artifact=output['file'],artifact_hash=output['sha256'],keyframe=composite.relative_to(project.root).as_posix(),reference_keyframe=keyframe['file'],
+    scene.update(artifact=output['file'],artifact_hash=output['sha256'],artifact_speed=s['speed'],keyframe=composite.relative_to(project.root).as_posix(),reference_keyframe=keyframe['file'],
         code=code_dest.relative_to(project.root).as_posix(),code_hash=code_hash,component=args.component,source_revision=args.source_revision,
         timing_fingerprint=digest({'source':s['source'],'cuts':s['cuts'],'speed':s['speed']}))
     # Artifact attachment is implementation of already approved direction, not a change of direction.
@@ -166,7 +172,7 @@ def render_scene(project,args):
         if any(x.startswith('.') or x in {'node_modules','out','private','data','credentials','models','deps','exports','media'} for x in f.relative_to(root).parts):continue
         if any((parent/'.talking-edit/state.sqlite3').exists() or (parent/'dependencies.json').exists() for parent in f.parents if parent!=root and parent.is_relative_to(root)):continue
         files.append((f.relative_to(root).as_posix(),file_hash(f)))
-    generated={'artifact','artifact_hash','keyframe','reference_keyframe','code','code_hash','component','source_revision','timing_fingerprint'}
+    generated={'artifact','artifact_hash','artifact_speed','keyframe','reference_keyframe','code','code_hash','component','source_revision','timing_fingerprint'}
     scene_plan={k:v for k,v in scene.items() if k not in generated}
     fp=digest({'scene':scene_plan,'files':files,'composition':args.composition,'timing':{'source':s['source'],'cuts':s['cuts'],'speed':s['speed']}})
     task,fresh=project.claim('scene',fp)
@@ -187,7 +193,7 @@ def render_scene(project,args):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--project')
     sub=parser.add_subparsers(dest='command',required=True)
-    sub.add_parser('doctor');sub.add_parser('skills');sub.add_parser('show');sub.add_parser('stop-server')
+    sub.add_parser('doctor');sub.add_parser('skills');sub.add_parser('show');sub.add_parser('stop-server');sub.add_parser('auto-gold-plan')
     p=sub.add_parser('create');p.add_argument('--title',default='口播剪辑项目')
     p=sub.add_parser('recover');p.add_argument('--resume',action='store_true')
     p=sub.add_parser('retry-local');p.add_argument('--task',required=True)
@@ -197,6 +203,11 @@ def main():
     p=sub.add_parser('wait');p.add_argument('--request',required=True);p.add_argument('--seconds',type=float,default=40)
     p=sub.add_parser('serve');p.add_argument('--idle-seconds',type=float,default=1800)
     p=sub.add_parser('step');p.add_argument('step',choices=['analyze','transcribe','render','roughcut','packaging'])
+    sub.add_parser('batch-list');sub.add_parser('batch-run')
+    p=sub.add_parser('batch-create');p.add_argument('--title',required=True);p.add_argument('--packaging',required=True);p.add_argument('--speed',type=float,default=1);p.add_argument('--mode',choices=['manual','auto'],default='manual')
+    p=sub.add_parser('batch-add');p.add_argument('--batch',required=True);p.add_argument('--file',required=True)
+    p=sub.add_parser('batch-enqueue');p.add_argument('--item',required=True);p.add_argument('--step',required=True,choices=['transcribe','analyze','render','auto'])
+    p=sub.add_parser('batch-open');p.add_argument('--item',required=True);p.add_argument('--stage',default='project');p.add_argument('--no-browser',action='store_true')
     p=sub.add_parser('prepare-deps');p.add_argument('dependency',choices=['fredtalk','whisper']);p.add_argument('--download-model',action='store_true');p.add_argument('--path');p.add_argument('--python')
     p=sub.add_parser('register');p.add_argument('--input',required=True)
     p=sub.add_parser('configure-runtime');p.add_argument('--ffmpeg',required=True);p.add_argument('--ffprobe',required=True);p.add_argument('--node')
@@ -241,12 +252,29 @@ def main():
             check(a.project,'请提供 --project 绝对路径。')
             project=Project.create(a.project,a.title) if a.command=='create' else Project(a.project)
             if a.command in ('show','create'):result=project.state()
+            elif a.command=='auto-gold-plan':
+                from auto_gold import propose
+                result={'scenes':propose(project.state()),'note':'仅生成候选，不代表动画已制作或成片已完成。'}
             elif a.command=='recover':result=project.recover(a.resume)
             elif a.command=='retry-local':result=project.retry_local(a.task)
             elif a.command=='update':result=project.update(json.loads(Path(a.input).read_text(encoding='utf-8-sig')),a.revision)
             elif a.command=='import':result=import_file(project,a.file,a.kind)
             elif a.command=='review':result=review(project,a.stage,not a.no_browser)
             elif a.command=='wait':result=wait(project,a.request,a.seconds)
+            elif a.command.startswith('batch-'):
+                from batch import Batch
+                b=Batch(project)
+                if a.command=='batch-list':result=b.list()
+                elif a.command=='batch-create':result=b.create(a.title,a.packaging,a.speed,a.mode)
+                elif a.command=='batch-add':result=b.add_file(a.batch,a.file,Path(a.file).name)
+                elif a.command=='batch-enqueue':result=b.enqueue(a.item,a.step)
+                elif a.command=='batch-open':result=review(Project(b.item(a.item)['project_path']),a.stage,not a.no_browser)
+                else:
+                    completed=[]
+                    while True:
+                        x=b.execute_next()
+                        if x['status'] in ('idle','busy','interrupted'):result={'jobs':completed,'state':x};break
+                        completed.append({'job_id':x['job_id'],'status':x['status']})
             elif a.command=='serve':
                 from web import serve
                 serve(project,a.idle_seconds);result={'stopped':True}

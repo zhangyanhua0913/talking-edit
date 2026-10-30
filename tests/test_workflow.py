@@ -34,6 +34,108 @@ class WorkflowTests(unittest.TestCase):
         self.p.update({'music':{'file':'media/music.wav','sha256':'abc','gain_db':-20}},s['revision'])
         self.assertEqual(rough,self.p.fingerprint('roughcut'));self.assertNotEqual(pack,self.p.fingerprint('packaging'))
 
+    def test_remotion_plugin_can_be_selected_for_packaging(self):
+        from registry import specs
+        item=next(x for x in specs() if x['id']=='remotion-plugin')
+        self.assertEqual((item['execution'],item['input'],item['output']),('agent','reviewed-timeline','remotion-clips'))
+        s=self.p.state();workflow=dict(s['workflow'],packaging='remotion-plugin')
+        self.p.update({'workflow':workflow},s['revision'])
+        self.assertEqual(self.p.state()['workflow']['packaging'],'remotion-plugin')
+
+    def test_evidence_style_selection_routes_to_bundled_guidance(self):
+        from cli import agent_brief
+        from unittest.mock import patch
+        s=self.p.state();self.p.update({'workflow':dict(s['workflow'],packaging='remotion-evidence')},s['revision'])
+        with patch('registry.status',return_value=[{'id':'remotion-evidence','ready':True,'reasons':[]}]):
+            result=agent_brief(self.p,'packaging')
+        self.assertTrue(Path(result['instructions']).is_file())
+        self.assertEqual(Path(result['instructions']).name,'evidence-style.md')
+
+    def test_bundled_styles_do_not_require_local_plugin_cache(self):
+        from registry import status
+        from unittest.mock import patch
+        with patch.dict(os.environ,{'CODEX_HOME':str(Path(self.tmp.name)/'empty-codex'),'TALKING_EDIT_NODE':sys.executable}):
+            items={x['id']:x for x in status()}
+        self.assertTrue(items['remotion-gold']['ready'])
+        self.assertTrue(items['remotion-evidence']['ready'])
+        self.assertFalse(items['remotion-plugin']['ready'])
+
+    def test_batch_projects_queue_and_interruption(self):
+        from batch import Batch
+        from unittest.mock import patch
+        b=Batch(self.p);batch=b.create('两条口播','none',1.3)
+        def fake_import(p,path,kind):
+            with p.db() as c:
+                s=p.state(c);s.update(source={'file':'media/fake.mp4','sha256':str(path)},duration=10);p._save(c,s)
+        with patch('batch.import_file',side_effect=fake_import):
+            a=b.add_file(batch['id'],'one.mp4','one.mp4');z=b.add_file(batch['id'],'two.mp4','two.mp4')
+        self.assertNotEqual(a['project_id'],z['project_id']);self.assertEqual(a['speed'],1.3)
+        first=b.enqueue(a['id'],'transcribe');self.assertEqual(first['id'],b.enqueue(a['id'],'transcribe')['id'])
+        b.enqueue(z['id'],'transcribe')
+        self.assertEqual(b.next()['status'],'running');self.assertEqual(b.next()['status'],'busy')
+        with patch('batch.pid_alive',return_value=False):self.assertEqual(b.next()['status'],'interrupted')
+        self.assertEqual(b.next()['item_id'],z['id'])
+        self.assertEqual(len(b.list()[0]['items']),2)
+        with self.assertRaises(EditError):b.enqueue(a['id'],'render')
+
+    def test_batch_auto_is_opt_in_and_only_local_no_packaging(self):
+        from batch import Batch
+        from unittest.mock import patch
+        b=Batch(self.p);manual=b.create('手动','none',1);auto=b.create('自动','none',1.3,'auto')
+        with self.assertRaises(EditError):b.create('不支持','fredtalk-motion',1,'auto')
+        def imported(p,path,kind):
+            with p.db() as c:
+                s=p.state(c);s.update(source={'file':'media/fake.mp4','sha256':'test'},duration=10,cues=[dict(id='a',start=1,end=2,text='测试')]);p._save(c,s)
+        with patch('batch.import_file',side_effect=imported):
+            a=b.add_file(auto['id'],'a.mp4','a.mp4');m=b.add_file(manual['id'],'b.mp4','b.mp4')
+        with self.assertRaises(EditError):b.enqueue(m['id'],'auto')
+        b.enqueue(a['id'],'auto')
+        with patch('media.render',return_value={'file':'test'}):result=b.execute_next()
+        self.assertEqual(result['status'],'done');self.assertEqual(b.item(a['id'])['status'],'awaiting_review')
+        self.assertTrue(Project(a['project_path']).approved('roughcut'))
+        self.assertFalse(Project(a['project_path']).approved('final'))
+
+    def test_auto_gold_plan_uses_current_cues_and_avoids_cuts(self):
+        from auto_gold import propose
+        self.video_state();s=self.p.state();s['cues']=[dict(id='a',start=1,end=2,text='第一段测试内容'),dict(id='b',start=4,end=6,text='被剪部分')]
+        s['cuts']=[dict(id='c',start=3,end=7,enabled=True)]
+        scenes=propose(s);self.assertEqual(len(scenes),1);self.assertEqual(scenes[0]['title'],'第一段测试内容');self.assertEqual(scenes[0]['start'],1)
+
+    def test_auto_gold_mode_and_weak_caption(self):
+        from batch import Batch
+        from auto_gold import propose
+        from unittest.mock import patch
+        with patch('batch.status',return_value=[{'id':'remotion-gold','stages':['packaging'],'ready':True}]):
+            result=Batch(self.p).create('暗金','remotion-gold',1.3,'auto')
+        self.assertEqual(result['mode'],'auto')
+        self.video_state();s=self.p.state();s['cues']=[dict(id='a',start=1,end=2,text='最后啊')]
+        with self.assertRaises(EditError):propose(s)
+
+    def test_gold_style_select_restore_and_invalidate_packaging(self):
+        from registry import specs
+        from cli import agent_brief
+        from unittest.mock import patch
+        spec=next(x for x in specs() if x['id']=='remotion-gold')
+        self.assertEqual((spec['execution'],spec['input'],spec['output']),('agent','reviewed-timeline','remotion-clips'))
+        self.video_state();s=self.p.state();self.p.decide(self.p.open_review('packaging'),s['revision'],'confirm')
+        self.assertTrue(self.p.approved('packaging'))
+        self.p.update({'workflow':dict(s['workflow'],packaging='remotion-gold')},s['revision'])
+        self.assertEqual(Project(self.p.root).state()['workflow']['packaging'],'remotion-gold')
+        self.assertFalse(self.p.approved('packaging'))
+        with patch('registry.status',return_value=[dict(spec,ready=True,reasons=[])]):
+            brief=agent_brief(self.p,'packaging')
+        self.assertTrue(Path(brief['instructions']).is_file())
+        self.assertEqual(Path(brief['instructions']).name,'gold-style.md')
+
+    def test_speed_advice_slow_fast_and_no_subtitles(self):
+        from media import speed_advice
+        self.assertFalse(speed_advice(self.p.state())['available'])
+        self.video_state();s=self.p.state();s['cues'][0]['text']='一二三四五六七八九十'
+        advice=speed_advice(s);self.assertEqual(advice['suggested'],1.25)
+        s['cues'][0]['text']='快'*100;self.assertEqual(speed_advice(s)['suggested'],1)
+        s['cues'][0]['text']='字'*40;s['cuts']=[dict(id='c',start=0,end=5,enabled=True)]
+        self.assertEqual(speed_advice(s)['characters'],0)
+
     def test_music_and_layout_validation(self):
         self.video_state();s=self.p.state()
         with self.assertRaises(EditError):self.p.update({'music':{'file':'media/music.wav','sha256':'abc','gain_db':0}},s['revision'])
@@ -168,6 +270,14 @@ class WorkflowTests(unittest.TestCase):
     def test_unknown_capability_and_bad_speed(self):
         with self.assertRaises(EditError):self.p.update({'speed':True},1)
         with self.assertRaises(EditError):self.p.update({'speed':float('nan')},1)
+
+    def test_speed_13_is_available_and_maps_time(self):
+        self.p.update({'speed':1.3},1)
+        self.assertEqual(self.p.state()['speed'],1.3)
+        mapping=intervals(13,[],1.3)
+        self.assertAlmostEqual(mapping[0]['output_end'],10)
+        from media import speed_advice
+        self.assertIn(1.3,[option['speed'] for option in speed_advice(dict(self.p.state(), source={'file':'sample.mp4'}, duration=13, cues=[dict(id='c',start=0,end=2,text='测试')], cuts=[]))['options']])
 
     def test_project_cookies_isolated(self):
         other=Project.create(Path(self.tmp.name)/'other','另一个项目')

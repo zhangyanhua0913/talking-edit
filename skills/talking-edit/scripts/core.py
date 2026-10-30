@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = '0.1.2'
+VERSION = '0.2.0'
 STAGES = ('project', 'workflow', 'transcribe-budget', 'roughcut', 'packaging', 'keyframes', 'final')
 
 
@@ -89,7 +89,7 @@ def clean(value):
 def validate(s):
     clean(s)
     check(isinstance(s.get('title'), str) and len(s['title']) <= 300, '项目标题无效。')
-    check(finite(s['speed']) and s['speed'] in (1, 1.1, 1.25, 1.5), '不支持的速度。')
+    check(finite(s['speed']) and s['speed'] in (1, 1.1, 1.15, 1.2, 1.25, 1.3, 1.5), '不支持的速度。')
     check(set(s['workflow']) == {'transcribe', 'roughcut', 'packaging', 'render'}, '流程步骤无效。')
     check(all(isinstance(x, str) for x in s['workflow'].values()), 'Skill 标识无效。')
     from registry import validate_selection
@@ -216,7 +216,7 @@ class Project:
         if stage in ('packaging', 'keyframes', 'final'):
             scenes=s['scenes']
             if stage=='packaging':
-                generated={'artifact','artifact_hash','keyframe','reference_keyframe','code','code_hash','component','source_revision','timing_fingerprint'}
+                generated={'artifact','artifact_hash','artifact_speed','keyframe','reference_keyframe','code','code_hash','component','source_revision','timing_fingerprint'}
                 scenes=[{k:v for k,v in scene.items() if k not in generated} for scene in scenes]
             base.update(scenes=scenes, packaging=s['workflow']['packaging'],music=s.get('music'))
         if stage == 'final':

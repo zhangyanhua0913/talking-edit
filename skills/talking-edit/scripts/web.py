@@ -9,8 +9,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
-from core import EditError, check, atomic, home
-from media import import_file, waveform
+from core import Project, EditError, check, atomic, home
+from media import import_file, waveform, speed_advice
 from registry import status
 from vault import Vault
 
@@ -76,6 +76,19 @@ class Handler(BaseHTTPRequestHandler):
                 raw=json.dumps(data,ensure_ascii=False).encode()
                 self.send_response(200);self.headers_common();self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Set-Cookie',self.server.cookie_name+'='+self.server.session+'; HttpOnly; SameSite=Strict; Path=/');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw);return
             if path=='/api/waveform':return self.reply(waveform(p))
+            if path=='/api/speed-advice':return self.reply(speed_advice(p.state()))
+            if path=='/api/batches':
+                from batch import Batch
+                return self.reply({'batches':Batch(p).list()})
+            if path=='/api/packaging-examples':
+                examples=p.root/'work'/'packaging-examples.json'
+                if not examples.is_file():return self.reply({'items':[]})
+                value=json.loads(examples.read_text(encoding='utf-8'))
+                check(isinstance(value.get('items'),list) and len(value['items'])<=12,'样片清单无效。')
+                for item in value['items']:
+                    check(isinstance(item.get('title'),str) and isinstance(item.get('description'),str),'样片说明无效。')
+                    video=p.public_file(item.get('file'));check(video.suffix.lower()=='.mp4','样片格式无效。')
+                return self.reply(value)
             if path=='/api/quote':
                 from providers import cloud_quote
                 return self.reply(cloud_quote(p))
@@ -96,6 +109,19 @@ class Handler(BaseHTTPRequestHandler):
             self.authorize(write=True)
             path=urlparse(self.path).path;p=self.server.project
             length=int(self.headers.get('Content-Length','0'))
+            if path=='/api/batch-upload':
+                from batch import Batch
+                check(0<length<=2*1024**3,'文件大小须在2GB以内。')
+                name=Path(unquote(self.headers.get('X-File-Name',''))).name
+                batch_id=self.headers.get('X-Batch-Id','')
+                temp=p.meta/('upload-'+uuid.uuid4().hex+Path(name).suffix)
+                try:
+                    with temp.open('xb') as f:
+                        remaining=length
+                        while remaining:
+                            block=self.rfile.read(min(1024*1024,remaining));check(block,'上传中断。');f.write(block);remaining-=len(block)
+                    return self.reply(Batch(p).add_file(batch_id,temp,name))
+                finally:temp.unlink(missing_ok=True)
             if path=='/api/import':
                 check(0<length<=2*1024**3,'文件大小须在2GB以内。')
                 name=Path(unquote(self.headers.get('X-File-Name',''))).name
@@ -110,6 +136,22 @@ class Handler(BaseHTTPRequestHandler):
                 finally:temp.unlink(missing_ok=True)
             check(0<=length<=8*1024**2,'请求过大。')
             data=json.loads(self.rfile.read(length) or b'{}')
+            if path=='/api/batch-create':
+                from batch import Batch
+                return self.reply(Batch(p).create(data['title'],data['packaging'],data['speed'],data.get('mode','manual')))
+            if path=='/api/batch-enqueue':
+                from batch import Batch
+                return self.reply(Batch(p).enqueue(data['item_id'],data['step']))
+            if path=='/api/batch-start':
+                from cli import detached
+                import sys
+                detached([sys.executable,str(Path(__file__).with_name('cli.py')),'--project',str(p.root),'batch-run'])
+                return self.reply({'started':True,'note':'队列串行执行；Agent 创作与用户审看仍需逐项目处理。'})
+            if path=='/api/batch-open':
+                from batch import Batch
+                from cli import review
+                item=Batch(p).item(data['item_id']);stage=data.get('stage','project')
+                return self.reply(review(Project(item['project_path']),stage,False))
             if path=='/api/heartbeat':return self.reply({'alive':True})
             if path=='/api/update':return self.reply(p.update(data['patch'],data['revision']))
             if path=='/api/decide':return self.reply(p.decide(data['request_id'],data['revision'],data['action'],data.get('note',''),data.get('cap')))

@@ -6,6 +6,8 @@
 |---|---|
 |doctor / skills|依赖、媒体程序、可用适配器；无付费请求|
 |configure-runtime|`--ffmpeg ABS_EXE --ffprobe ABS_EXE`，保存本机媒体程序位置|
+|batch-create/add/list/enqueue/run/open|详见batch.md，创建批次、导入、串行排队和打开独立项目；create支持 `--mode manual/auto`|
+|auto-gold-plan|只读当前字幕与剪切区间，返回暗金标题候选；不会执行制作或授权|
 |create / show|创建/读取指定项目；create 可加 `--title`|
 |import|`--kind video/subtitles/script/image/music --file ABS_FILE`，复制原素材到项目；video 须含原声音轨；music 返回文件及摘要，须再 update 采纳|
 |update|`--input PATCH_JSON --revision N`，仅允许标题/文稿/速度/流程/字幕/剪切/场景/烧录字幕|
@@ -22,7 +24,7 @@
 |attach-scene|`--scene ID --video MP4 --keyframe PNG --code REMOTION_DIR --entry SRC_FILE --component SOURCE_ID --source-revision SOURCE_COMMIT [--manifest FRED_MANIFEST]`；FredTalk 须过关键帧门禁|
 |retry-local|`--task TASK_ID`，只为已明确失败的本地任务解除幂等占用、保留原失败证据；云端不允许|
 
-项目默认原速，speed 可选 1/1.1/1.25/1.5，变速后重新确认；时间始终记录在原视频源坐标。cuts 与 scenes 是半开区间。重叠剪切合并执行，不能删除整片。字幕纯文字修订不产生剪切；句内剪切保留待校对提示，不推断剩余文字。修改时要同步按实际剩余发音修字幕和边界。
+项目默认原速，speed 可选 1/1.1/1.15/1.2/1.25/1.3/1.5，变速后重新确认；时间始终记录在原视频源坐标。cuts 与 scenes 是半开区间。重叠剪切合并执行，不能删除整片。字幕纯文字修订不产生剪切；句内剪切保留待校对提示，不推断剩余文字。修改时要同步按实际剩余发音修字幕和边界。
 
 ```json
 {
